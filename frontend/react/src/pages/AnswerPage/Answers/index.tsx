@@ -1,95 +1,144 @@
-import { CheckCircle, ThumbsDown, ThumbsUp } from "phosphor-react"
-import { UserAvatar } from "../styles"
-import { AnswerContent, AnswerDivider, AnswerFooter, AnswerHeader, AnswerItem, AnswersContainer, AnswersList, CorrectAnswerBadge, MarkCorrectButton, PaginationButton, PaginationContainer, SortingOptions, SortOption, VoteButton, VoteContainer, VoteCount } from "./styles"
-import React, { useContext, useState, Suspense } from "react"
-import { useAccount } from "@starknet-react/core"
-import { shortenAddress } from "@utils/shortenAddress"
+import { CheckCircle, ThumbsDown, ThumbsUp } from "phosphor-react";
+import { UserAvatar } from "../styles";
+import {
+  AnswerContent,
+  AnswerDivider,
+  AnswerFooter,
+  AnswerHeader,
+  AnswerItem,
+  AnswersContainer,
+  AnswersList,
+  CorrectAnswerBadge,
+  MarkCorrectButton,
+  PaginationButton,
+  PaginationContainer,
+  SortingOptions,
+  SortOption,
+  VoteButton,
+  VoteContainer,
+  VoteCount,
+  StatusMessage,
+} from "./styles";
+import React, { useContext, useState, useEffect, Suspense } from "react";
+import { useAccount } from "@starknet-react/core";
+import { shortenAddress } from "@utils/shortenAddress";
+import { AnswersContext } from "../providers/AnswersProvider/answersContext";
+import { useWallet } from "@hooks/useWallet";
+import { useStatusMessage } from "@hooks/useStatusMessage";
+import { useContractContext } from "@hooks/useContract/contractContext";
+import type { Question } from "../types";
 
-import { AnswersContext } from "../providers/AnswersProvider/answersContext"
-
-import type { Question } from "../types"
-import { useWallet } from "@hooks/useWallet"
-import { useStatusMessage } from "@hooks/useStatusMessage"
-
-const ReactMarkdown = React.lazy(() => import("react-markdown"))
-const remarkGfm = await import("remark-gfm").then((mod) => mod.default || mod)
+// Use named import for react-markdown
+import { default as ReactMarkdown } from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface AnswersProps {
-  question: Question
-  setQuestion: (question: Question) => void
+  question: Question;
+  setQuestion: (question: Question) => void;
 }
 
 export function Answers({ question, setQuestion }: AnswersProps) {
-  const [sortBy, setSortBy] = useState<"votes" | "date">("votes")
-  const [currentPage, setCurrentPage] = useState(1)
+  const [sortBy, setSortBy] = useState<"votes" | "date">("votes");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [correctAnswerId, setCorrectAnswerId] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  const { isConnected, address } = useAccount()
-  const { openConnectModal } = useWallet()
-  const { answers, setIsLoading, setAnswers } = useContext(AnswersContext)
-  const { setStatusMessage } = useStatusMessage()
+  const { isConnected, address } = useAccount();
+  const { openConnectModal } = useWallet();
+  const { answers, setIsLoading, setAnswers } = useContext(AnswersContext);
+  const { setStatusMessage, statusMessage } = useStatusMessage();
+  const { callContract, getCorrectAnswer } = useContractContext();
 
-  // Sort answers based on selected option
+  useEffect(() => {
+    const fetchCorrectAnswer = async () => {
+      try {
+        const correctAnswer = await getCorrectAnswer(question.id);
+        if (correctAnswer) {
+          setCorrectAnswerId(correctAnswer.toString());
+          setQuestion({ ...question, isOpen: false });
+          setAnswers(
+            answers.map((answer) => ({
+              ...answer,
+              isCorrect: answer.id === correctAnswer.toString(),
+            })),
+          );
+        }
+      } catch (error: any) {
+        console.error("Error fetching correct answer:", error);
+        setStatusMessage({ type: "error", message: `Failed to fetch correct answer: ${error.message || "Unknown error"}` });
+      }
+    };
+    fetchCorrectAnswer();
+  }, [question.id, getCorrectAnswer, setQuestion, answers, setAnswers, setStatusMessage]);
+
   const sortedAnswers = [...answers].sort((a, b) => {
     if (sortBy === "votes") {
-      return b.votes - a.votes
+      return b.votes - a.votes;
     } else {
-      // Simple date sorting for mock data
-      return a.timestamp.includes("Today") && !b.timestamp.includes("Today") ? -1 : 1
+      return a.timestamp.includes("Today") && !b.timestamp.includes("Today") ? -1 : 1;
     }
-  })
+  });
 
-  // Handle marking an answer as correct
   const handleMarkCorrect = async (answerId: string) => {
-    if (!isConnected) {
-      openConnectModal()
-      return
+    if (!isConnected || !address) {
+      openConnectModal();
+      setStatusMessage({ type: "error", message: "Please connect your wallet." });
+      return;
     }
 
-    setIsLoading(true)
-    setStatusMessage({ type: "info", message: "Processing transaction..." })
+    if (address.toLowerCase() !== question.authorAddress.toLowerCase()) {
+      setStatusMessage({ type: "error", message: "Only the question author can mark an answer as correct." });
+      return;
+    }
+
+    if (correctAnswerId) {
+      setStatusMessage({ type: "error", message: "An answer has already been marked as correct." });
+      return;
+    }
+
+    setIsLoading(true);
+    setIsProcessing(true);
+    setStatusMessage({ type: "info", message: "Processing transaction..." });
 
     try {
-      // Simulate blockchain transaction
-      await new Promise((resolve) => setTimeout(resolve, 2000))
+      await callContract({
+        contractAddress: "0x0228432fe63e8808fd694c8c80f6266a735c340760812f64fe20b015d2b2700e",
+        entrypoint: "mark_answer_as_correct",
+        calldata: [answerId],
+      });
 
-      // Update answers state
+      setCorrectAnswerId(answerId);
       setAnswers(
         answers.map((answer) => ({
           ...answer,
           isCorrect: answer.id === answerId,
         })),
-      )
+      );
+      setQuestion({ ...question, isOpen: false });
 
       setStatusMessage({
         type: "success",
-        message: "Answer marked as correct! Funds have been transferred to the responder.",
-      })
-
-      // Update question status
-      setQuestion({
-        ...question,
-        isOpen: false,
-      })
-    } catch (error) {
-      console.error("Transaction error:", error)
+        message: "Answer marked as correct! Rewards have been distributed to the responder.",
+      });
+    } catch (error: any) {
+      console.error("Transaction error:", error);
       setStatusMessage({
         type: "error",
-        message: "Failed to mark answer as correct. Please try again.",
-      })
+        message: `Failed to mark answer as correct: ${error.message || "Unknown error"}`,
+      });
     } finally {
-      setIsLoading(false)
-      // Clear status message after 5 seconds
+      setIsLoading(false);
+      setIsProcessing(false);
       setTimeout(() => {
-        setStatusMessage(null)
-      }, 5000)
+        setStatusMessage(null);
+      }, 5000);
     }
-  }
+  };
 
-  // Handle voting on an answer
   const handleVote = async (answerId: string, direction: "up" | "down") => {
     if (!isConnected) {
-      openConnectModal()
-      return
+      openConnectModal();
+      return;
     }
 
     setAnswers(
@@ -98,19 +147,32 @@ export function Answers({ question, setQuestion }: AnswersProps) {
           return {
             ...answer,
             votes: direction === "up" ? answer.votes + 1 : answer.votes - 1,
-          }
+          };
         }
-        return answer
+        return answer;
       }),
-    )
-  }
+    );
+  };
 
-  // Check if current user is the question author
-  const isQuestionAuthor = address && address.toLowerCase() === question.authorAddress.toLowerCase()
+  const isQuestionAuthor = address && address.toLowerCase() === question.authorAddress.toLowerCase();
+  const answersPerPage = 5;
+  const totalPages = Math.ceil(answers.length / answersPerPage);
+  const paginatedAnswers = sortedAnswers.slice(
+    (currentPage - 1) * answersPerPage,
+    currentPage * answersPerPage,
+  );
 
   return (
     <AnswersContainer>
       <h2>Answers</h2>
+      {statusMessage && (
+        <StatusMessage type={statusMessage.type}>
+          {statusMessage.type === "info" && <span>⏳</span>}
+          {statusMessage.type === "success" && <CheckCircle size={16} weight="fill" />}
+          {statusMessage.type === "error" && <span>❌</span>}
+          {statusMessage.message}
+        </StatusMessage>
+      )}
       <SortingOptions>
         <SortOption active={sortBy === "votes"} onClick={() => setSortBy("votes")}>
           Votes
@@ -121,10 +183,10 @@ export function Answers({ question, setQuestion }: AnswersProps) {
       </SortingOptions>
 
       <AnswersList>
-        {sortedAnswers.length === 0 ? (
+        {paginatedAnswers.length === 0 ? (
           <p>No answers yet. Be the first to answer!</p>
         ) : (
-          sortedAnswers.map((answer) => (
+          paginatedAnswers.map((answer) => (
             <AnswerItem key={answer.id} isCorrect={answer.isCorrect}>
               <AnswerHeader>
                 <UserAvatar
@@ -145,7 +207,7 @@ export function Answers({ question, setQuestion }: AnswersProps) {
               </AnswerHeader>
 
               <AnswerContent>
-              <Suspense fallback={<p>Carregando visualização...</p>}>
+                <Suspense fallback={<p>Loading preview...</p>}>
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
@@ -174,8 +236,10 @@ export function Answers({ question, setQuestion }: AnswersProps) {
                   </VoteButton>
                 </VoteContainer>
 
-                {isQuestionAuthor && question.isOpen && !answer.isCorrect && (
-                  <MarkCorrectButton onClick={() => handleMarkCorrect(answer.id)}>Mark as Correct</MarkCorrectButton>
+                {isQuestionAuthor && question.isOpen && !correctAnswerId && (
+                  <MarkCorrectButton onClick={() => handleMarkCorrect(answer.id)} disabled={isProcessing}>
+                    {isProcessing ? "Processing..." : "Mark as Correct"}
+                  </MarkCorrectButton>
                 )}
               </AnswerFooter>
               <AnswerDivider />
@@ -184,16 +248,16 @@ export function Answers({ question, setQuestion }: AnswersProps) {
         )}
       </AnswersList>
 
-      {answers.length > 5 && (
+      {answers.length > answersPerPage && (
         <PaginationContainer>
           <PaginationButton disabled={currentPage === 1} onClick={() => setCurrentPage(currentPage - 1)}>
             Previous
           </PaginationButton>
           <span>
-            Page {currentPage} of {Math.ceil(answers.length / 5)}
+            Page {currentPage} of {totalPages}
           </span>
           <PaginationButton
-            disabled={currentPage === Math.ceil(answers.length / 5)}
+            disabled={currentPage === totalPages}
             onClick={() => setCurrentPage(currentPage + 1)}
           >
             Next
@@ -201,5 +265,5 @@ export function Answers({ question, setQuestion }: AnswersProps) {
         </PaginationContainer>
       )}
     </AnswersContainer>
-  )
+  );
 }
